@@ -151,6 +151,49 @@ describe("derivePendingBackgroundWork", () => {
     ]);
   });
 
+  it("propagates awaited from server-owned monitor command turn items", () => {
+    const tasks = derivePendingBackgroundWork({
+      latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },
+      providerThreads: [{ id: "pt-1" as never }],
+      turnItems: [
+        {
+          id: "turn-item:monitor:mon_1" as never,
+          type: "command_execution",
+          status: "running",
+          title: "Watch build",
+          nativeItemRef: null,
+          input: "tail -f build.log",
+          monitor: true,
+          awaited: true,
+        },
+        {
+          id: "turn-item:monitor:mon_2" as never,
+          type: "command_execution",
+          status: "running",
+          title: "Dev server",
+          nativeItemRef: null,
+          input: "npm run dev",
+          monitor: true,
+        },
+      ],
+    });
+    expect(tasks).toEqual([
+      {
+        taskId: "turn-item:monitor:mon_1",
+        description: "Watch build",
+        kind: "monitor",
+        awaited: true,
+      },
+      {
+        taskId: "turn-item:monitor:mon_2",
+        description: "Dev server",
+        kind: "monitor",
+      },
+    ]);
+    expect(backgroundWorkHoldsCompletion([tasks[0]!])).toBe(true);
+    expect(backgroundWorkHoldsCompletion([tasks[1]!])).toBe(false);
+  });
+
   it("includes nonterminal turn items and excludes completed ones", () => {
     const tasks = derivePendingBackgroundWork({
       latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" },

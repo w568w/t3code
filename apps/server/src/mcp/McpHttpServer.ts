@@ -87,6 +87,8 @@ import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorkflowToolkit } from "./toolkits/workflow/tools.ts";
+import { MonitorToolkit } from "./toolkits/monitor/tools.ts";
+import * as MonitorHandlers from "./toolkits/monitor/handlers.ts";
 import * as WorkflowHandlers from "./toolkits/workflow/handlers.ts";
 import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
@@ -1504,6 +1506,8 @@ const layerWorkflowToolkit = toolkitRegistration(WorkflowToolkit, WorkflowHandle
 
 export const layerMessageToolkit = toolkitRegistration(MessageToolkit, MessageHandlers.layer);
 
+const layerMonitorToolkit = toolkitRegistration(MonitorToolkit, MonitorHandlers.layer);
+
 const layerWorktreeToolkitRegistration = toolkitRegistration(
   WorktreeToolkit,
   WorktreeHandlers.layer,
@@ -1610,6 +1614,7 @@ export const layerTools = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerMessageToolkit,
+  layerMonitorToolkit,
 );
 
 const enabledWhenFallbackClient = {

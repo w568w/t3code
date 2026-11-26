@@ -103,6 +103,7 @@ import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
   hasPendingBackgroundSubagent,
+  isServerProcessMonitorItem,
   pendingBackgroundTurnItems,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
@@ -720,6 +721,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "secret_request.record":
     case "link_request.record":
     case "feedback_request.record":
+    case "process_monitor.record":
       return command.threadId;
     case "thread.fork":
     case "thread.merge_back":
@@ -11663,6 +11665,262 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  const MONITOR_WAKE_OUTCOME_RANK = {
+    unknown: 0,
+    updated: 1,
+    completed: 2,
+    cancelled: 3,
+    failed: 4,
+  } as const;
+  const MAX_COALESCED_MONITOR_TEXT_CHARS = 16_384;
+  const MAX_COALESCED_MONITOR_DETAIL_CHARS = 8_192;
+
+  const combineBoundedTail = (
+    first: string | undefined,
+    second: string | undefined,
+    separator: string,
+    maxChars: number,
+  ): string | undefined => {
+    const parts = [first, second].filter(
+      (part): part is string => part !== undefined && part.length > 0,
+    );
+    if (parts.length === 0) return undefined;
+    const joined = parts.join(separator);
+    if (joined.length <= maxChars) return joined;
+    const prefix = "… (earlier monitor events truncated)\n";
+    return prefix + joined.slice(joined.length - Math.max(0, maxChars - prefix.length));
+  };
+
+  const dispatchProcessMonitorRecord = Effect.fn("orchestrationV2.dispatch.processMonitorRecord")(
+    function* (
+      command: Extract<OrchestrationV2InternalCommand, { readonly type: "process_monitor.record" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const projection = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "turnItems"], {
+          turnItemTypes: ["command_execution"],
+          turnItemStatuses: ["pending", "running", "waiting"],
+          runStatuses: ["queued"],
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const thread = projection.thread;
+      const threadInactive =
+        thread.deletedAt !== null ||
+        thread.archivedAt !== null ||
+        thread.settledAt !== null ||
+        thread.settledOverride === "settled";
+      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
+      if (existing !== undefined && existing.type !== "command_execution") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Turn item ${command.turnItemId} is not a command execution.`,
+        });
+      }
+      const now = yield* DateTime.now;
+      if (existing === undefined) {
+        if (command.status !== "running") return;
+        if (threadInactive) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} is not active.`,
+          });
+        }
+        if (
+          command.runId !== null &&
+          (yield* stopReachedRun(command, command.threadId, command.runId))
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Run ${command.runId} was stopped.`,
+          });
+        }
+        const turnItem: OrchestrationV2TurnItem = {
+          id: command.turnItemId,
+          threadId: command.threadId,
+          runId: command.runId,
+          nodeId: command.nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: yield* nextTurnItemOrdinal(projection),
+          status: "running",
+          title: command.description,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "command_execution",
+          input: command.command,
+          monitor: true,
+          ...(command.awaited === true ? { awaited: true as const } : {}),
+        };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          ...(command.runId === null ? {} : { runId: command.runId }),
+          ...(command.nodeId === null ? {} : { nodeId: command.nodeId }),
+          providerInstanceId: thread.providerInstanceId,
+          occurredAt: now,
+          payload: turnItem,
+        });
+        return;
+      }
+
+      if (!isOrchestrationV2WorkActive(existing.status)) return;
+
+      if (command.status !== "running") {
+        const updatedItem: OrchestrationV2TurnItem = {
+          ...existing,
+          status: command.status,
+          completedAt: now,
+          updatedAt: now,
+          ...(command.exitCode === undefined ? {} : { exitCode: command.exitCode }),
+          ...(command.output === undefined ? {} : { output: command.output }),
+          ...(command.status === "failed" ? { outputIndicatesFailure: true } : {}),
+        };
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          ...(existing.runId === null ? {} : { runId: existing.runId }),
+          ...(existing.nodeId === null ? {} : { nodeId: existing.nodeId }),
+          providerInstanceId: thread.providerInstanceId,
+          occurredAt: now,
+          payload: updatedItem,
+        });
+      }
+
+      if (command.wake === undefined || threadInactive) return;
+
+      // Coalesce into an already-queued process-monitor wake run instead of stacking one run per event.
+      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
+      if (queuedRuns.length > 0) {
+        const queuedRecords = yield* projectionStore
+          .getThreadRecords(command.threadId, ["messages", "turnItems"], {
+            messageRoles: ["user"],
+            turnItemTypes: ["user_message"],
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          );
+        const queuedRun = queuedRuns.findLast((run) => {
+          const message = queuedRecords.messages.find(
+            (candidate) => candidate.id === run.userMessageId,
+          );
+          return (
+            message !== undefined &&
+            message.creationSource === "server" &&
+            message.delegatedCompletion === undefined &&
+            message.notification?.source.kind === "monitor" &&
+            message.notification.source.pullRequest === undefined
+          );
+        });
+        const queuedMessage =
+          queuedRun === undefined
+            ? undefined
+            : queuedRecords.messages.find((candidate) => candidate.id === queuedRun.userMessageId);
+        if (
+          queuedRun !== undefined &&
+          queuedMessage !== undefined &&
+          queuedMessage.notification !== undefined
+        ) {
+          const mergedText =
+            combineBoundedTail(
+              queuedMessage.text,
+              command.wake.text,
+              "\n\n",
+              MAX_COALESCED_MONITOR_TEXT_CHARS,
+            ) ?? command.wake.text;
+          const mergedDetail = combineBoundedTail(
+            queuedMessage.notification.detail,
+            command.wake.notification.detail,
+            "\n",
+            MAX_COALESCED_MONITOR_DETAIL_CHARS,
+          );
+          const mergedOutcome =
+            MONITOR_WAKE_OUTCOME_RANK[command.wake.notification.outcome] >=
+            MONITOR_WAKE_OUTCOME_RANK[queuedMessage.notification.outcome]
+              ? command.wake.notification.outcome
+              : queuedMessage.notification.outcome;
+          const mergedNotification = {
+            source: { kind: "monitor" as const },
+            outcome: mergedOutcome,
+            summary: command.wake.notification.summary,
+            ...(mergedDetail === undefined ? {} : { detail: mergedDetail }),
+          };
+          const emitEvent = emit(events, command);
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: command.threadId,
+            runId: queuedRun.id,
+            ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
+            providerInstanceId: queuedRun.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...queuedMessage,
+              text: mergedText,
+              notification: mergedNotification,
+              updatedAt: now,
+            },
+          });
+          const queuedTurnItem = queuedRecords.turnItems.find(
+            (candidate) =>
+              candidate.type === "user_message" && candidate.messageId === queuedMessage.id,
+          );
+          if (queuedTurnItem !== undefined && queuedTurnItem.type === "user_message") {
+            yield* emitEvent({
+              type: "turn-item.updated",
+              threadId: command.threadId,
+              runId: queuedRun.id,
+              ...(queuedRun.rootNodeId === null ? {} : { nodeId: queuedRun.rootNodeId }),
+              providerInstanceId: queuedRun.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                ...queuedTurnItem,
+                text: mergedText,
+                notification: mergedNotification,
+                updatedAt: now,
+              },
+            });
+          }
+          return;
+        }
+      }
+
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: command.wake.messageId,
+          text: command.wake.text,
+          notification: command.wake.notification,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        },
+        events,
+        effects,
+      );
+    },
+  );
+
   /**
    * Closes the link cards still waiting for the user. Their agent stopped
    * waiting long ago, so nobody is woken: stopping, settling or archiving the
@@ -14802,6 +15060,41 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       )
         ? Effect.void
         : Ref.update(effects, (existing) => [...existing, delegatedTasksStopEffect(command)]);
+    const stopServerProcessMonitors = Effect.fn("Orchestrator.stopServerProcessMonitors")(
+      function* (now: DateTime.Utc) {
+        const emittedIds = new Set(
+          (yield* Ref.get(events)).flatMap((event) =>
+            event.type === "turn-item.updated" && !isOrchestrationV2WorkActive(event.payload.status)
+              ? [event.payload.id]
+              : [],
+          ),
+        );
+        const emitEvent = emit(events, command);
+        for (const item of projection.turnItems) {
+          if (
+            !isServerProcessMonitorItem(item) ||
+            !isOrchestrationV2WorkActive(item.status) ||
+            emittedIds.has(item.id)
+          ) {
+            continue;
+          }
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            ...(item.runId === null ? {} : { runId: item.runId }),
+            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+            providerInstanceId: projection.thread.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...item,
+              status: "interrupted",
+              completedAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+      },
+    );
     const latestRun = projection.runs.findLast((run) => run.status !== "queued");
     const target =
       projection.runs.findLast(
@@ -14811,7 +15104,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (derivePendingBackgroundWork({
         latestRun,
         providerThreads: projection.providerThreads,
-        turnItems: projection.turnItems,
+        turnItems: projection.turnItems.filter((item) => !isServerProcessMonitorItem(item)),
         activeProviderThreadId: projection.thread.activeProviderThreadId,
         runs: projection.runs,
       }).length > 0
@@ -14840,6 +15133,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         const enqueued = yield* Ref.get(interruptEffects);
         yield* Ref.update(events, (existing) => [...existing, ...written]);
         yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
+        yield* stopServerProcessMonitors(yield* DateTime.now);
         yield* cancelIdleOrphans({ command, events, projection });
         yield* stopDelegatedTasks;
         return interrupted.value;
@@ -14851,6 +15145,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
     }
     const now = yield* DateTime.now;
+    yield* stopServerProcessMonitors(now);
     // Record that Stop reached the turn it could not interrupt and the thread's last executed
     // run, so a late tool call from their agent starts nothing.
     const executed = latestExecutedRun(projection.runs);
@@ -16608,6 +16903,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "link_request.record":
         yield* dispatchLinkRequestRecord(command, events, effects);
         break;
+      case "process_monitor.record":
+        yield* dispatchProcessMonitorRecord(command, events, effects);
+        break;
       default:
         return yield* dispatchUnsupported(command);
     }
@@ -17262,6 +17560,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const { event } = stored;
     if (event.type === "subagent.updated")
       return !isOrchestrationV2WorkActive(event.payload.status);
+    if (event.type === "turn-item.updated")
+      return (
+        isServerProcessMonitorItem(event.payload) &&
+        !isOrchestrationV2WorkActive(event.payload.status)
+      );
     if (event.type !== "provider-thread.updated") return false;
     const holding = new Set(
       (event.payload.pendingBackgroundTasks ?? [])
@@ -17273,12 +17576,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     else holdingTaskIdsByProviderThread.delete(event.payload.id);
     return previous !== undefined && [...previous].some((taskId) => !holding.has(taskId));
   };
-  yield* Stream.merge(
-    eventSink.stream({
-      afterSequence: terminalEventsAfterSequence,
-      eventType: "provider-thread.updated",
-    }),
-    eventSink.stream({ afterSequence: terminalEventsAfterSequence, eventType: "subagent.updated" }),
+  yield* Stream.mergeAll(
+    [
+      eventSink.stream({
+        afterSequence: terminalEventsAfterSequence,
+        eventType: "provider-thread.updated",
+      }),
+      eventSink.stream({
+        afterSequence: terminalEventsAfterSequence,
+        eventType: "subagent.updated",
+      }),
+      eventSink.stream({
+        afterSequence: terminalEventsAfterSequence,
+        eventType: "turn-item.updated",
+      }),
+    ],
+    { concurrency: "unbounded" },
   ).pipe(
     Stream.filter(settlesChildWork),
     Stream.runForEach((stored) =>

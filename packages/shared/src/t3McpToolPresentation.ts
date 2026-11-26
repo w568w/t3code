@@ -240,6 +240,12 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "background waits"],
     "background-wait",
   ),
+  t3_monitor_start: tool(
+    ["Start", "Starting", "Started", "a background monitor"],
+    "background-wait",
+  ),
+  t3_monitor_stop: tool(["Stop", "Stopping", "Stopped", "a background monitor"], "background-wait"),
+  t3_monitor_list: tool(["List", "Listing", "Listed", "background monitors"], "background-wait"),
   t3_thread_interrupt: tool(
     ["Interrupt", "Interrupting", "Requested an interrupt of", "a T3 thread"],
     "thread-interrupt",
