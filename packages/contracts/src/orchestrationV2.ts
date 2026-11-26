@@ -1998,6 +1998,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    /** Set when a server-owned monitor holds thread completion while running. */
+    awaited: Schema.optional(Schema.Literal(true)),
     /** The provider wakes the agent when this command finishes after its turn. */
     completionWake: Schema.optional(Schema.Literal("always")),
   }),
@@ -2900,6 +2902,8 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    /** Set when a server-owned monitor holds thread completion while running. */
+    awaited: Schema.optional(Schema.Literal(true)),
     /** The provider wakes the agent when this command finishes after its turn. */
     completionWake: Schema.optional(Schema.Literal("always")),
   }),
@@ -4094,6 +4098,28 @@ const OrchestrationV2InternalCommand = Schema.Union([
      */
     answeringTurnItemIds: Schema.optional(Schema.Array(TurnItemId)),
     /** Tells the agent how the card ended, in the same commit that closes it. */
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+      }),
+    ),
+  }),
+  /** Records, wakes, or finishes a server-owned background process monitor. */
+  Schema.Struct({
+    type: Schema.Literal("process_monitor.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: Schema.NullOr(RunId),
+    nodeId: Schema.NullOr(NodeId),
+    turnItemId: TurnItemId,
+    command: Schema.String,
+    description: TrimmedNonEmptyString,
+    status: Schema.Literals(["running", "completed", "failed", "cancelled", "interrupted"]),
+    awaited: Schema.optional(Schema.Literal(true)),
+    output: Schema.optional(Schema.String),
+    exitCode: Schema.optional(Schema.Int),
     wake: Schema.optional(
       Schema.Struct({
         messageId: MessageId,

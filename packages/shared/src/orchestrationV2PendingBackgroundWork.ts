@@ -54,6 +54,16 @@ export function turnItemUpdateCanEndBackgroundWork(
   return BACKGROUND_TURN_ITEM_TYPES.has(item.type) && !isOrchestrationV2WorkActive(item.status);
 }
 
+export function isServerProcessMonitorItem(
+  item: Pick<OrchestrationV2TurnItem, "type" | "providerThreadId"> & {
+    readonly monitor?: boolean | undefined;
+  },
+): boolean {
+  return (
+    item.type === "command_execution" && item.monitor === true && item.providerThreadId === null
+  );
+}
+
 export function deriveBlockedOnThreadWait(input: {
   readonly activeRun: Pick<OrchestrationV2Run, "id" | "status"> | null;
   readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
@@ -167,6 +177,7 @@ type PendingBackgroundWorkTurnItem = {
   } | null;
   readonly input?: unknown;
   readonly monitor?: boolean | undefined;
+  readonly awaited?: true | undefined;
   readonly prompt?: string | undefined;
   readonly childThreadId?: ThreadId | null;
 };
@@ -225,7 +236,11 @@ function pendingTaskFromTurnItem(
         ...(item.childThreadId == null ? {} : { childThreadId: item.childThreadId }),
       };
     case "command_execution":
-      return { ...named, kind: item.monitor === true ? "monitor" : "command" };
+      return {
+        ...named,
+        kind: item.monitor === true ? "monitor" : "command",
+        ...(item.awaited === true ? { awaited: true as const } : {}),
+      };
     default:
       return { ...named, kind: "background_task" };
   }
