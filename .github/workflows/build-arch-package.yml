@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Optional semver override (e.g. 0.1.12-fork.20261126.1)"
+        description: "Optional semver override (e.g. 0.1.13-nightly.20261127.1)"
         required: false
         type: string
       create_release:
@@ -64,11 +64,11 @@ jobs:
             build_version="${GITHUB_REF_NAME#v}"
           else
             stamp="$(date -u +%Y%m%d)"
-            build_version="${base_version}-fork.${stamp}.${GITHUB_RUN_NUMBER}"
+            build_version="${base_version}-nightly.${stamp}.${GITHUB_RUN_NUMBER}"
           fi
-          # In Arch vercmp, attaching `fork` directly (e.g. 0.1.12fork20261126.5) sorts
-          # strictly below a plain 0.1.12 release tag while still sorting monotonically on main.
-          pkgver="${build_version//-fork./fork}"
+          # In Arch vercmp, attaching `nightly` directly (e.g. 0.1.13nightly20261127.5) sorts
+          # strictly below a plain 0.1.13 release tag while still sorting monotonically on main.
+          pkgver="${build_version//-nightly./nightly}"
           pkgver="${pkgver//-/_}"
           echo "build_version=$build_version" >> "$GITHUB_OUTPUT"
           echo "pkgver=$pkgver" >> "$GITHUB_OUTPUT"
@@ -208,6 +208,7 @@ jobs:
         shell: bash
         env:
           PKGVER: ${{ needs.build-appimage.outputs.pkgver }}
+          BUILD_VERSION: ${{ needs.build-appimage.outputs.build_version }}
           REPO_URL: https://github.com/${{ github.repository }}
         run: |
           set -euo pipefail
@@ -220,10 +221,15 @@ jobs:
 
           appimage_sha="$(sha256sum T3-Code-x86_64.AppImage | awk '{print $1}')"
           license_sha="$(sha256sum LICENSE | awk '{print $1}')"
+          app_name="T3 Code"
+          if [[ "$BUILD_VERSION" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            app_name="T3 Code (Nightly)"
+          fi
 
           sed -Ei \
             -e "s|^pkgver=.*|pkgver=${PKGVER}|" \
             -e "s|^url=.*|url='${REPO_URL}'|" \
+            -e "s|^Name=.*|Name=${app_name}|" \
             PKGBUILD
 
           awk -v app_sha="$appimage_sha" -v lic_sha="$license_sha" '
