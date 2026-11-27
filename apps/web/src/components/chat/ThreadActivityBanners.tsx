@@ -3,8 +3,10 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
   OrchestrationV2ProviderSession,
+  ScheduledTask,
   ThreadId,
 } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   presentPendingBackgroundWork,
@@ -17,6 +19,7 @@ import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
 import * as DateTime from "effect/DateTime";
 import { msg, T, Var } from "gt-react";
 import {
+  CalendarClockIcon,
   CircleDashedIcon,
   CircleStopIcon,
   GitBranchIcon,
@@ -34,6 +37,9 @@ import { Button, InlineButton } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
+import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
+import type { ActiveScheduledTask } from "./threadAutomations.logic";
+import { NextScheduledRunLabel } from "./ThreadAutomationsPanel";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 export function extensionStatusBannerItem(
@@ -297,6 +303,116 @@ export function backgroundWorkNowItem(
           {input.stopping ? <T>Stopping...</T> : <T context="verb, stops background work">Stop</T>}
         </InlineButton>
       </>
+    ),
+  };
+}
+
+/** Active thread-bound scheduled tasks, for the end of the timeline when the thread is idle. */
+export function scheduledNowItem(
+  input: {
+    readonly threadId: ThreadId;
+    readonly tasks: ReadonlyArray<ActiveScheduledTask>;
+    readonly timestampFormat: TimestampFormat;
+    readonly timeZone: string | undefined;
+    readonly canOperate: boolean;
+    readonly busyTaskId: string | null;
+    readonly onRunNow: (task: ScheduledTask) => Promise<void>;
+    readonly onPause: (task: ScheduledTask) => Promise<void>;
+    readonly onManage: () => void;
+  },
+  resolve: MessageResolver = m,
+): ThreadNowItem | null {
+  const first = input.tasks[0];
+  if (!first) return null;
+  const { tasks, timestampFormat, timeZone, canOperate, busyTaskId, onRunNow, onPause, onManage } =
+    input;
+  const runNowButton = (task: ActiveScheduledTask) => (
+    <InlineButton
+      disabled={!canOperate || busyTaskId !== null || task.lastRunStatus === "running"}
+      onClick={() => void onRunNow(task)}
+    >
+      <T context="verb, runs a scheduled task now">Run now</T>
+    </InlineButton>
+  );
+  const pauseButton = (task: ActiveScheduledTask) => (
+    <InlineButton
+      tone="muted"
+      disabled={!canOperate || busyTaskId !== null}
+      onClick={() => void onPause(task)}
+    >
+      <T context="verb, pauses a scheduled task">Pause</T>
+    </InlineButton>
+  );
+  const manageButton = (
+    <InlineButton tone="muted" onClick={onManage}>
+      <T context="verb, manages scheduled tasks">Manage</T>
+    </InlineButton>
+  );
+  const scheduleMeta = (task: ActiveScheduledTask) => (
+    <>
+      {scheduleLabel(task.schedule, timestampFormat, timeZone, task.nextRunAt, resolve)}
+      {" · "}
+      <T>
+        next <NextScheduledRunLabel value={task.nextRunAt} />
+      </T>
+    </>
+  );
+
+  const isSingle = tasks.length === 1;
+  return {
+    id: `scheduled:${input.threadId}`,
+    icon: <CalendarClockIcon />,
+    title: isSingle ? (
+      <T>
+        Scheduled · <Var>{first.title}</Var>
+      </T>
+    ) : (
+      <Popover>
+        <PopoverTrigger openOnHover render={<InlineButton />}>
+          <T>
+            Scheduled · <Var>{first.title}</Var> (+<Var>{tasks.length - 1}</Var> more)
+          </T>
+        </PopoverTrigger>
+        <PopoverPopup
+          side="top"
+          width="md"
+          padding="compact"
+          aria-label={resolve(msg("Scheduled tasks"))}
+        >
+          <ul className="m-0 max-h-60 list-none space-y-2 overflow-y-auto p-0 text-xs">
+            {tasks.map((task) => (
+              <li key={task.id} className="flex items-baseline justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium text-foreground">{task.title}</div>
+                  <div className="truncate text-muted-foreground">{scheduleMeta(task)}</div>
+                </div>
+                <div className="flex shrink-0 items-baseline gap-2">
+                  {runNowButton(task)}
+                  {pauseButton(task)}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </PopoverPopup>
+      </Popover>
+    ),
+    description: isSingle ? (
+      scheduleMeta(first)
+    ) : (
+      <T>
+        next <NextScheduledRunLabel value={first.nextRunAt} />
+      </T>
+    ),
+    actions: isSingle ? (
+      <>
+        {runNowButton(first)}
+        <span aria-hidden>·</span>
+        {pauseButton(first)}
+        <span aria-hidden>·</span>
+        {manageButton}
+      </>
+    ) : (
+      manageButton
     ),
   };
 }

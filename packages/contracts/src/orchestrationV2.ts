@@ -1911,6 +1911,14 @@ const OrchestrationV2FeedbackRequestFields = {
   feedbackStatus: AgentFeedbackRequestStatus,
 } as const;
 
+export const OrchestrationV2DynamicToolWait = Schema.Struct({
+  kind: Schema.Literal("timer"),
+  wakeAt: Schema.optional(IsoDateTime),
+  cron: Schema.optional(TrimmedNonEmptyString),
+  prompt: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2DynamicToolWait = typeof OrchestrationV2DynamicToolWait.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2145,6 +2153,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     viewedImagePath: Schema.optional(TrimmedNonEmptyString),
+    wait: Schema.optional(OrchestrationV2DynamicToolWait),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */
@@ -2453,6 +2462,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
     Schema.NullOr(Schema.Literals(["preparing", "starting", "running", "waiting"])),
   ),
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  blockedOnTimerWait: Schema.optional(Schema.Boolean),
   status: OrchestrationV2ShellThreadStatus,
   lastError: Schema.optional(Schema.NullOr(Schema.String)),
   lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
@@ -3042,6 +3052,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     viewedImagePath: Schema.optional(TrimmedNonEmptyString),
+    wait: Schema.optional(OrchestrationV2DynamicToolWait),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
     /** Set on the wire when output was withheld; fetch it with getTurnItem. */

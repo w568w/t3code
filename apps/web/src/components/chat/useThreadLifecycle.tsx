@@ -76,7 +76,10 @@ import {
   childInputNowItem,
   goalNowItem,
   runStopNowItem,
+  scheduledNowItem,
 } from "./ThreadActivityBanners";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useThreadAutomations } from "./ThreadAutomationsPanel";
 import { useForceStopThread } from "./useForceStopThread";
 import { useAtomValue } from "@effect/atom-react";
 import type { RunStopPresentation } from "@t3tools/client-runtime/state/thread-execution";
@@ -649,6 +652,29 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         messages,
       )
     : null;
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
+  const automations = useThreadAutomations({
+    environmentId,
+    threadId: activeThreadShell?.id ?? null,
+  });
+  const scheduledNow =
+    activeThreadShell !== null && !runIsLive
+      ? scheduledNowItem(
+          {
+            threadId: activeThreadShell.id,
+            tasks: automations.activeScheduledTasks,
+            timestampFormat,
+            timeZone: automations.tasksQuery.data?.timeZone,
+            canOperate: automations.canOperate,
+            busyTaskId: automations.busyTaskId,
+            onRunNow: automations.runNow,
+            onPause: (task) => automations.toggleEnabled(task, false),
+            onManage: () =>
+              void navigate({ to: "/settings/scheduled-tasks", search: { environmentId } }),
+          },
+          messages,
+        )
+      : null;
   // The relative times read the clock; nowMinute re-renders them on the minute.
   const snoozedUntil = activeThreadShell?.snoozedUntil ?? null;
   const settledAt = activeThreadShell?.settledAt ?? null;
@@ -759,6 +785,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     workNow: runStop?.state === "stopping" ? runStopNow : backgroundWorkNow,
     childInputNow,
     goalNow,
+    scheduledNow,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,

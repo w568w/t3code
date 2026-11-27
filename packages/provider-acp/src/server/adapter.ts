@@ -4,6 +4,7 @@ import {
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
+  type OrchestrationV2DynamicToolWait,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
@@ -720,6 +721,14 @@ export interface AcpAdapterV2Flavor {
    * tool ends. With `deferFinalizeForBackgroundWork`, the turn stays open until then.
    */
   readonly toolOutlivesPrompt?: (toolCall: AcpToolCallState) => boolean;
+  /**
+   * Normalized passive wait metadata for a provider-native timer/schedule tool call.
+   * Returned on every tool projection using the item's stable `startedAt` timestamp.
+   */
+  readonly extractToolWait?: (
+    toolCall: AcpToolCallState,
+    startedAtMs: number,
+  ) => OrchestrationV2DynamicToolWait | undefined;
   /**
    * Finalize a settled turn held only by running commands once the session has been silent for
    * `timeout`, so a command that never reports back cannot leave the thread in Working forever.
@@ -2136,6 +2145,7 @@ function buildAcpStandardToolTurnItem(input: {
   readonly monitorCommand: string | undefined;
   readonly projectAsCommandExecution: boolean;
   readonly inputVariant: string;
+  readonly wait?: OrchestrationV2DynamicToolWait | undefined;
 }): OrchestrationV2TurnItem {
   const {
     base,
@@ -2151,6 +2161,7 @@ function buildAcpStandardToolTurnItem(input: {
     monitorCommand,
     projectAsCommandExecution,
     inputVariant,
+    wait,
   } = input;
   if (changes.length > 0) {
     return {
@@ -2290,6 +2301,7 @@ function buildAcpStandardToolTurnItem(input: {
         ...base,
         type: "dynamic_tool",
         toolName: toolCall.title ?? toolCall.kind ?? null,
+        ...(wait === undefined ? {} : { wait }),
         input: rawInput ?? {},
         ...(rawOutput === undefined ? {} : { output: rawOutput }),
       };
@@ -4380,6 +4392,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       monitorCommand,
                       projectAsCommandExecution,
                       inputVariant,
+                      wait: flavor.extractToolWait?.(
+                        toolCall,
+                        DateTime.toEpochMillis(base.startedAt),
+                      ),
                     });
               yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
               return true;
@@ -5867,6 +5883,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               monitorCommand,
               projectAsCommandExecution,
               inputVariant,
+              wait: flavor.extractToolWait?.(toolCall, DateTime.toEpochMillis(base.startedAt)),
             });
           }
           yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });

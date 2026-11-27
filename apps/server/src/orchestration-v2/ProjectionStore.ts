@@ -89,8 +89,8 @@ import {
 } from "@t3tools/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import {
-  deriveBlockedOnThreadWait,
   derivePendingBackgroundWork,
+  deriveRunWaitKind,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -1950,6 +1950,7 @@ export function threadShellFromProjection(
     runs,
     pullRequests: projection.thread.pullRequests,
   });
+  const runWaitKind = deriveRunWaitKind({ activeRun, turnItems: projection.turnItems });
   return {
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
@@ -2000,7 +2001,8 @@ export function threadShellFromProjection(
     latestRunBackgroundWake:
       latestRun != null && isBackgroundWakeRunForShell(latestRun, projection),
     activeRunId: activeRun?.id ?? null,
-    blockedOnThreadWait: deriveBlockedOnThreadWait({ activeRun, turnItems: projection.turnItems }),
+    blockedOnThreadWait: runWaitKind === "thread",
+    blockedOnTimerWait: runWaitKind === "timer",
     activityRunStatus: activityRun?.status ?? null,
     activityRunStartedAt:
       activityRun === null ? null : orchestrationV2RunWorkStartedAt(activityRun),
@@ -2139,6 +2141,7 @@ type ShellThreadState = {
   readonly latestRunBackgroundWake: boolean;
   readonly activeRunId: RunId | null;
   readonly blockedOnThreadWait: boolean;
+  readonly blockedOnTimerWait: boolean;
   readonly activityRunStatus: ShellActivityRunStatus | null;
   readonly activityRunStartedAt: DateTime.Utc | null;
   readonly lastError: string | null;
@@ -2317,6 +2320,7 @@ function shellFromState(input: {
     latestRunBackgroundWake: input.state.latestRunBackgroundWake,
     activeRunId: input.state.activeRunId,
     blockedOnThreadWait: input.state.blockedOnThreadWait,
+    blockedOnTimerWait: input.state.blockedOnTimerWait,
     activityRunStatus: input.state.activityRunStatus,
     activityRunStartedAt: input.state.activityRunStartedAt,
     status: input.state.latestRunStatus,
@@ -9303,6 +9307,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pullRequests: thread.pullRequests,
           }),
         ];
+        const runWaitKind = deriveRunWaitKind({
+          activeRun:
+            row.active_run_id === null || row.active_run_status !== "running"
+              ? null
+              : { id: RunId.make(row.active_run_id), status: "running" },
+          turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
+        });
         return {
           thread,
           latestRunId,
@@ -9313,13 +9324,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunStopRequested,
           latestRunBackgroundWake,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
-          blockedOnThreadWait: deriveBlockedOnThreadWait({
-            activeRun:
-              row.active_run_id === null || row.active_run_status !== "running"
-                ? null
-                : { id: RunId.make(row.active_run_id), status: "running" },
-            turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
-          }),
+          blockedOnThreadWait: runWaitKind === "thread",
+          blockedOnTimerWait: runWaitKind === "timer",
           activityRunStartedAt:
             row.activity_run_started_at === null
               ? null

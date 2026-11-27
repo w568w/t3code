@@ -2592,6 +2592,7 @@ export default function ChatView(props: ChatViewProps) {
     workNow,
     childInputNow,
     goalNow,
+    scheduledNow,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,
@@ -3335,7 +3336,11 @@ export default function ChatView(props: ChatViewProps) {
 
   const shownThreadSyncPhase = activeEnvironmentUnavailable ? null : delayedThreadSyncPhase;
   const hasThreadNow =
-    attentionNow !== null || workNow !== null || goalNow !== null || shownThreadSyncPhase !== null;
+    attentionNow !== null ||
+    workNow !== null ||
+    goalNow !== null ||
+    scheduledNow !== null ||
+    shownThreadSyncPhase !== null;
   const queuedRunCount = serverProjection ? getUserQueuedThreadRuns(serverProjection).length : 0;
   // The queue control is mounted for every server thread but joins the footer only while it shows
   // something, by its own rule: an optimistic message stops counting once the server has it.
@@ -3382,6 +3387,7 @@ export default function ChatView(props: ChatViewProps) {
           work={workNow}
           syncPhase={shownThreadSyncPhase}
           goal={goalNow}
+          scheduled={scheduledNow}
         />
         {threadStatusLine}
         {pendingGuestMessageCount > 0 && isServerThread && activeThread ? (

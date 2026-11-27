@@ -81,12 +81,14 @@ export function ThreadNow({
   work,
   syncPhase,
   goal,
+  scheduled = null,
 }: {
   /** Something that needs you elsewhere, such as a subagent's question. */
   readonly attention: ThreadNowItem | null;
   readonly work: ThreadNowItem | null;
   readonly syncPhase: ThreadSyncPhase | null;
   readonly goal: ThreadNowItem | null;
+  readonly scheduled?: ThreadNowItem | null;
 }): ReactNode {
   return (
     <>
@@ -94,6 +96,7 @@ export function ThreadNow({
       {work ? <ThreadNowLine item={work} /> : null}
       {syncPhase ? <ThreadSyncLine phase={syncPhase} /> : null}
       {goal ? <ThreadNowLine item={goal} /> : null}
+      {scheduled ? <ThreadNowLine item={scheduled} /> : null}
     </>
   );
 }

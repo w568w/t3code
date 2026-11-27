@@ -280,6 +280,7 @@ export function resolveThreadListV2Status(
     | "pendingGuestMessageCount"
     | "runtime"
     | "blockedOnThreadWait"
+    | "blockedOnTimerWait"
   >,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
@@ -292,7 +293,10 @@ export function resolveThreadListV2Status(
   if ((thread.pendingGuestMessageCount ?? 0) > 0) {
     return "request";
   }
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
+  if (
+    thread.runtime?.status === "running" &&
+    (thread.blockedOnThreadWait === true || thread.blockedOnTimerWait === true)
+  ) {
     return "waiting";
   }
   if (

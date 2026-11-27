@@ -1778,6 +1778,30 @@ it.effect("SQL shells flag only an active turn blocked solely on T3 thread waits
       steps: [{ id: "review", text: "Review the child result", status: "running" }],
     });
     yield* assertBlocked(true);
+
+    yield* updateItem({ ...wait, status: "completed", completedAt: at });
+    const timerWait = {
+      ...itemBase,
+      id: TurnItemId.make("item:timer-wait:active"),
+      runId: run.id,
+      type: "dynamic_tool" as const,
+      toolName: "Run schedule",
+      wait: { kind: "timer" as const, wakeAt: "2026-06-01T12:05:00.000Z" },
+      input: { DurationSeconds: 300 },
+      status: "running" as const,
+    };
+    yield* updateItem(timerWait);
+    const listedWithTimer = (yield* store.getShellSnapshot()).threads.find(
+      (row) => row.id === threadId,
+    );
+    for (const shell of [yield* store.getThreadShell(threadId), listedWithTimer]) {
+      assert.equal(shell?.blockedOnThreadWait ?? false, false);
+      assert.equal(shell?.blockedOnTimerWait ?? false, true);
+    }
+    yield* assertShellIndexCoversShells();
+    yield* updateItem({ ...timerWait, status: "completed", completedAt: at });
+    yield* updateItem(wait);
+    yield* assertBlocked(true);
     yield* updateItem({
       ...wait,
       id: TurnItemId.make("item:thread-wait:proposed-plan"),

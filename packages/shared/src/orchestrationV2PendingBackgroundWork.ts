@@ -64,12 +64,15 @@ export function isServerProcessMonitorItem(
   );
 }
 
-export function deriveBlockedOnThreadWait(input: {
+export type OrchestrationV2RunWaitKind = "thread" | "timer";
+
+export function deriveRunWaitKind(input: {
   readonly activeRun: Pick<OrchestrationV2Run, "id" | "status"> | null;
   readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
-}): boolean {
-  if (input.activeRun?.status !== "running") return false;
-  let hasWait = false;
+}): OrchestrationV2RunWaitKind | null {
+  if (input.activeRun?.status !== "running") return null;
+  let hasThreadWait = false;
+  let hasTimerWait = false;
   for (const item of input.turnItems) {
     if (
       item.runId !== input.activeRun.id ||
@@ -80,21 +83,31 @@ export function deriveBlockedOnThreadWait(input: {
     ) {
       continue;
     }
-    if (item.type !== "dynamic_tool") return false;
+    if (item.type !== "dynamic_tool") return null;
     const tool = resolveT3McpToolId(item.toolName);
     if (
-      tool !== "t3_thread_wait" &&
-      !(
-        tool === "delegate_task" &&
+      tool === "t3_thread_wait" ||
+      (tool === "delegate_task" &&
         Predicate.isObject(item.input) &&
-        Reflect.get(item.input, "mode") === "wait"
-      )
+        Reflect.get(item.input, "mode") === "wait")
     ) {
-      return false;
+      hasThreadWait = true;
+      continue;
     }
-    hasWait = true;
+    if (item.wait?.kind === "timer") {
+      hasTimerWait = true;
+      continue;
+    }
+    return null;
   }
-  return hasWait;
+  return hasThreadWait ? "thread" : hasTimerWait ? "timer" : null;
+}
+
+export function deriveBlockedOnThreadWait(input: {
+  readonly activeRun: Pick<OrchestrationV2Run, "id" | "status"> | null;
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+}): boolean {
+  return deriveRunWaitKind(input) === "thread";
 }
 
 /** A provider instance's background subagent outlives its run and still calls tools. */

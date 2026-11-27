@@ -1,10 +1,12 @@
 import type {
+  OrchestrationV2DynamicToolWait,
   ProviderApprovalOption,
   ProviderUserInputAnswers,
   UserInputQuestion,
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { resolveT3McpToolId } from "@t3tools/shared/t3McpToolPresentation";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
@@ -58,6 +60,7 @@ const decodeToolCallContent = Schema.decodeUnknownOption(AcpWireSchema.ToolCallC
 
 // agy keeps its own `schedule` call in progress until the wake fires, then replies by itself.
 const ANTIGRAVITY_SCHEDULE_TITLES = new Set(["Run schedule", "Running schedule"]);
+const ANTIGRAVITY_SCHEDULE_PROMPT_LIMIT = 160;
 
 /**
  * The agent goes on running a command or a scheduled wake after its prompt ends, and replies by
@@ -66,6 +69,41 @@ const ANTIGRAVITY_SCHEDULE_TITLES = new Set(["Run schedule", "Running schedule"]
 export function antigravityToolOutlivesPrompt(toolCall: AcpToolCallState): boolean {
   if (toolCall.title !== undefined && ANTIGRAVITY_SCHEDULE_TITLES.has(toolCall.title)) return true;
   return antigravityCommandOutlivesPrompt(toolCall);
+}
+
+/** Normalized passive wait metadata for an Antigravity `schedule` tool call. */
+export function antigravityExtractToolWait(
+  toolCall: AcpToolCallState,
+  startedAtMs: number,
+): OrchestrationV2DynamicToolWait | undefined {
+  if (toolCall.title === undefined || !ANTIGRAVITY_SCHEDULE_TITLES.has(toolCall.title)) {
+    return undefined;
+  }
+  const input = Predicate.isObject(toolCall.data.rawInput) ? toolCall.data.rawInput : undefined;
+  const rawDuration = input?.DurationSeconds;
+  const wakeAt =
+    typeof rawDuration === "number" &&
+    Number.isFinite(rawDuration) &&
+    rawDuration > 0 &&
+    Number.isFinite(startedAtMs)
+      ? DateTime.formatIso(DateTime.makeUnsafe(startedAtMs + rawDuration * 1_000))
+      : undefined;
+  const cron =
+    typeof input?.CronExpression === "string"
+      ? input.CronExpression.trim() || undefined
+      : undefined;
+  const rawPrompt =
+    typeof input?.Prompt === "string" ? input.Prompt.replace(/\s+/gu, " ").trim() : "";
+  const prompt =
+    rawPrompt.length > ANTIGRAVITY_SCHEDULE_PROMPT_LIMIT
+      ? `${rawPrompt.slice(0, ANTIGRAVITY_SCHEDULE_PROMPT_LIMIT - 1).trimEnd()}…`
+      : rawPrompt || undefined;
+  return {
+    kind: "timer",
+    ...(wakeAt ? { wakeAt } : {}),
+    ...(cron ? { cron } : {}),
+    ...(prompt ? { prompt } : {}),
+  };
 }
 
 /** A non-daemon command the agent awaits; unlike a schedule, it reports progress while it runs. */

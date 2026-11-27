@@ -6,6 +6,7 @@ import * as AcpWireSchema from "effect-acp/schema-v1";
 import {
   extractAntigravityUserInputQuestion,
   antigravityApprovalOptions,
+  antigravityExtractToolWait,
   antigravitySubagentOutput,
   antigravityToolOutlivesPrompt,
   classifyAntigravitySubagentToolCall,
@@ -602,6 +603,41 @@ describe("Antigravity tool results", () => {
     expect(antigravityToolOutlivesPrompt(normalizeAntigravityToolCall(event.toolCall))).toBe(
       outlives,
     );
+  });
+
+  it("extracts normalized timer wait metadata for Antigravity schedule calls", () => {
+    const startedAtMs = Date.parse("2026-06-01T12:00:00.000Z");
+    const extract = (title: string, rawInput: Record<string, unknown>) =>
+      antigravityExtractToolWait(
+        normalizeAntigravityToolCall(
+          parseToolUpdate({
+            sessionId: "session-1",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: `call_${title}`,
+              status: "in_progress",
+              kind: "other",
+              title,
+              rawInput,
+            },
+          }).toolCall,
+        ),
+        startedAtMs,
+      );
+
+    expect(extract("Run schedule", { DurationSeconds: 90, Prompt: "Check   CI\nstatus" })).toEqual({
+      kind: "timer",
+      wakeAt: "2026-06-01T12:01:30.000Z",
+      prompt: "Check CI status",
+    });
+    expect(
+      extract("Running schedule", { CronExpression: "*/5 * * * *", Prompt: "Poll deployments" }),
+    ).toEqual({
+      kind: "timer",
+      cron: "*/5 * * * *",
+      prompt: "Poll deployments",
+    });
+    expect(extract("Run list_dir", { DurationSeconds: 90 })).toBeUndefined();
   });
 
   it("keeps the start of a long command line, where the program and target are", () => {

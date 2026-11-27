@@ -18,7 +18,7 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { workEntryDisplayIndicatesToolFailure } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import { assetMediaActionsSource } from "./ChatMarkdownMedia";
-import { Minimize2Icon, XIcon } from "lucide-react";
+import { ClockIcon, Minimize2Icon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { getVirtualizedScrollFadeClassName } from "../ui/scroll-area";
 import {
@@ -62,7 +62,7 @@ import {
   toolGroupSummaryIconName,
   workEntryIconName,
 } from "./TimelineWorkEntryRow.logic";
-import { formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
+import { formatWaitCountdownNow, formatWorkingTimerNow } from "./TimelineWorkGroupRows.logic";
 
 export const WorkGroupSection = memo(function WorkGroupSection({
   anchorKey,
@@ -133,6 +133,16 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
   return (
     <span
       ref={tickTextContent(() => formatWorkingTimerNow(createdAt, activeThreadEnvironmentId), true)}
+      className="tabular-nums"
+    />
+  );
+}
+
+function WaitCountdown({ wakeAt }: { wakeAt: string }) {
+  const { activeThreadEnvironmentId } = use(TimelineRowCtx);
+  return (
+    <span
+      ref={tickTextContent(() => formatWaitCountdownNow(wakeAt, activeThreadEnvironmentId), true)}
       className="tabular-nums"
     />
   );
@@ -629,6 +639,16 @@ export function LiveWorkEntryTimelineRow({
   if (pendingApproval) return <TimelinePendingApprovalRow approval={pendingApproval} />;
 
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
+  const timerWait =
+    row.active && item?.type === "dynamic_tool" && item.wait?.kind === "timer"
+      ? item.wait
+      : undefined;
+  const timerWaitSubject = timerWait
+    ? [timerWait.cron, timerWait.prompt].filter(Boolean).join(" · ") ||
+      (timerWait.wakeAt
+        ? gt("Timer", { $context: "scheduled wait label" })
+        : gt("Schedule", { $context: "scheduled wait label" }))
+    : null;
   const thoughtLine =
     row.thought && !row.expanded
       ? liveThoughtLine(sliceThoughtPreviewSource(row.thought.detail ?? ""))
@@ -680,7 +700,17 @@ export function LiveWorkEntryTimelineRow({
       ) : null}
       <LiveActivityRow
         label={
-          thoughtIsStatus ? (
+          timerWait ? (
+            <>
+              {gt("Waiting · {subject}", { subject: timerWaitSubject })}
+              {timerWait.wakeAt ? (
+                <>
+                  {" · "}
+                  <WaitCountdown wakeAt={timerWait.wakeAt} />
+                </>
+              ) : null}
+            </>
+          ) : thoughtIsStatus ? (
             row.active ? (
               gt("Thinking")
             ) : (
@@ -709,7 +739,10 @@ export function LiveWorkEntryTimelineRow({
           )
         }
         iconName={workEntryIconName(row.entry)}
-        toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
+        iconNode={
+          timerWait ? <ClockIcon aria-hidden className="size-4 shrink-0 stroke-2" /> : undefined
+        }
+        toolIcon={timerWait ? undefined : (row.entry.toolIcon ?? row.entry.toolSource?.icon)}
         failed={failed}
         active={row.active}
       />

@@ -42,6 +42,7 @@ import {
   AlarmClockIcon,
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
+  CalendarClockIcon,
   CheckIcon,
   CircleAlertIcon,
   CircleCheckIcon,
@@ -141,6 +142,9 @@ import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
 import { ThreadDetailsIssueRows } from "../chat/ThreadDetailsIssueRows";
 import { IssueGlyph, issueStatePresentation } from "../issue/issuePresentation";
+import { presentPendingBackgroundWork } from "@t3tools/client-runtime/state/thread-execution";
+import { NextScheduledRunLabel } from "../chat/ThreadAutomationsPanel";
+import type { SidebarThreadScheduledSummary } from "../chat/threadAutomations.logic";
 import { useThreadIntentPrefetch } from "./useThreadIntentPrefetch";
 
 // The fields thread rows show. Provider status pushes refresh `checkedAt`,
@@ -291,6 +295,7 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  scheduledSummary,
 }: {
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
@@ -308,6 +313,7 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  scheduledSummary?: SidebarThreadScheduledSummary | null | undefined;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const worktreePath = thread.worktreePath?.trim();
@@ -317,6 +323,7 @@ function SidebarThreadTooltip({
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const gt = useGT();
   const m = useMessages();
+  const backgroundWork = presentPendingBackgroundWork(thread.pendingBackgroundTasks, m);
   return (
     <>
       <ThreadHoverCard
@@ -404,6 +411,48 @@ function SidebarThreadTooltip({
             />
             <div className="min-w-0 truncate text-foreground/75">
               {terminalProcessLabel(terminalProcessCount, m)}
+            </div>
+          </div>
+        ) : null}
+        {backgroundWork ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <CircleDotDashedIcon className="mt-0.5 size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="truncate text-foreground/80">{backgroundWork.title}</div>
+              {backgroundWork.items.length > 1 ? (
+                <ul className="m-0 list-none space-y-0.5 p-0 text-muted-foreground">
+                  {backgroundWork.items.slice(0, 4).map((item) => (
+                    <li key={item.taskId} className="truncate">
+                      {item.label}
+                    </li>
+                  ))}
+                  {backgroundWork.items.length > 4 ? (
+                    <li className="text-muted-foreground/80">
+                      <T>
+                        +<Var>{backgroundWork.items.length - 4}</Var> more
+                      </T>
+                    </li>
+                  ) : null}
+                </ul>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        {scheduledSummary ? (
+          <div className="flex min-w-0 items-start gap-2">
+            <CalendarClockIcon className="mt-0.5 size-3 shrink-0 stroke-muted-foreground" />
+            <div className="min-w-0 flex-1 truncate text-foreground/75">
+              {scheduledSummary.count === 1 ? (
+                <T>
+                  <Var>{scheduledSummary.title}</Var> · next{" "}
+                  <NextScheduledRunLabel value={scheduledSummary.nextRunAt} />
+                </T>
+              ) : (
+                <T>
+                  <Var>{scheduledSummary.title}</Var> (+<Var>{scheduledSummary.count - 1}</Var>{" "}
+                  more) · next <NextScheduledRunLabel value={scheduledSummary.nextRunAt} />
+                </T>
+              )}
             </div>
           </div>
         ) : null}
@@ -597,6 +646,7 @@ const TOP_STATUS_ICONS = {
   failed: CircleAlertIcon,
   done: CircleCheckIcon,
   woke: AlarmClockIcon,
+  scheduled: CalendarClockIcon,
 } as const;
 
 function TopStatusIcon(props: { icon: keyof typeof TOP_STATUS_ICONS; className: string }) {
@@ -621,6 +671,7 @@ type SidebarThreadRowProps = {
   sweepAction: SidebarSweepAction | null;
   snoozeWakeLabelText: string | null;
   wokeAt: string | null;
+  scheduledSummary?: SidebarThreadScheduledSummary | null | undefined;
   isActive: boolean;
   // Set on the active row only; scrolls it into view when a reveal is owed.
   revealRef?: ((row: HTMLElement, threadKey: string) => (() => void) | undefined) | undefined;
@@ -878,7 +929,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           icon: "done" as const,
                           className: "text-success-foreground",
                         }
-                      : null;
+                      : props.scheduledSummary
+                        ? {
+                            label: gt("Scheduled", { $context: "thread status" }),
+                            icon: "scheduled" as const,
+                            className: "text-muted-foreground",
+                          }
+                        : null;
   const isWokeStatus = topStatus?.icon === "woke";
 
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
@@ -916,6 +973,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      scheduledSummary={props.scheduledSummary}
     />
   );
 

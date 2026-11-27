@@ -233,6 +233,24 @@ describe("resolveSidebarThreadStatus", () => {
 
   const idle = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
 
+  it("treats a running thread blocked on a timer wait as waiting", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        runtime,
+        blockedOnTimerWait: true,
+      }),
+    ).toBe("waiting");
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        hasPendingApprovals: true,
+        runtime,
+        blockedOnTimerWait: true,
+      }),
+    ).toBe("approval");
+  });
+
   it("prioritizes awaiting input over a running runtime, below approval", () => {
     expect(
       resolveSidebarThreadStatus({

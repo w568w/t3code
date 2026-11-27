@@ -663,6 +663,7 @@ type ThreadStatusInput = Pick<
   lastVisitedAt?: string | null | undefined;
   pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
   blockedOnThreadWait?: boolean | undefined;
+  blockedOnTimerWait?: boolean | undefined;
 };
 
 // Read at event time: subscribing Sidebar to terminal or modifier state re-renders every row.
@@ -959,7 +960,14 @@ type SidebarThreadStatusInput = Pick<
   | "pendingGuestMessageCount"
   | "runtime"
   | "blockedOnThreadWait"
+  | "blockedOnTimerWait"
 >;
+
+function isBlockedOnRunWait(
+  thread: Pick<ThreadStatusInput, "blockedOnThreadWait" | "blockedOnTimerWait">,
+): boolean {
+  return thread.blockedOnThreadWait === true || thread.blockedOnTimerWait === true;
+}
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
@@ -972,7 +980,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if ((thread.pendingGuestMessageCount ?? 0) > 0) {
     return "request";
   }
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
+  if (thread.runtime?.status === "running" && isBlockedOnRunWait(thread)) {
     return "waiting";
   }
   if (thread.runtime?.status === "preparing") {
@@ -1263,7 +1271,7 @@ export function resolveThreadStatusPill(input: {
   }
 
   if (
-    (thread.runtime?.status === "running" && thread.blockedOnThreadWait !== true) ||
+    (thread.runtime?.status === "running" && !isBlockedOnRunWait(thread)) ||
     thread.runtime?.status === "waiting"
   ) {
     return {
@@ -1293,7 +1301,7 @@ export function resolveThreadStatusPill(input: {
     dotClass: "bg-sidebar-muted-foreground",
     pulse: false,
   };
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) return waiting;
+  if (thread.runtime?.status === "running" && isBlockedOnRunWait(thread)) return waiting;
 
   // A failed run goes to the inbox even while background work holds the thread.
   if (hasUnseenRunFailure(thread)) {

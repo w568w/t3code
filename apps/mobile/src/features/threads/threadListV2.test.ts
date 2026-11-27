@@ -174,6 +174,11 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(present({ ...raw, blockedOnThreadWait: false }))).toBe(
       "working",
     );
+    const timerBlocked = present({ ...raw, blockedOnTimerWait: true });
+    expect(resolveThreadListV2Status(timerBlocked)).toBe("waiting");
+    expect(resolveThreadListV2Status({ ...timerBlocked, hasPendingApprovals: true })).toBe(
+      "approval",
+    );
   });
 
   it("settles a failure the user opened to ready in the row, keeping the raw status", () => {
