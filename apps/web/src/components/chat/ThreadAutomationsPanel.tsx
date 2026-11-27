@@ -1,10 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
+import * as Predicate from "effect/Predicate";
 import { T, useGT, useMessages, Var } from "gt-react";
 import type { MessageResolver } from "~/i18n/messages";
-import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
+import { CalendarClockIcon, ClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,
@@ -21,9 +23,17 @@ import {
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useClientSettings } from "../../hooks/useSettings";
+import { tickTextContent } from "../../lib/tickTextContent";
 import { cn } from "../../lib/utils";
 import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
-import { formatNextScheduledRunLabel, sortActiveScheduledTasks } from "./threadAutomations.logic";
+import {
+  extractActiveTimerWaits,
+  formatNextScheduledRunLabel,
+  sortActiveScheduledTasks,
+  type ActiveThreadTimerWait,
+} from "./threadAutomations.logic";
+import { formatWaitCountdownNow } from "./TimelineWorkGroupRows.logic";
+import { useQuietThreadProjection } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -48,6 +58,45 @@ export function NextScheduledRunLabel(props: { readonly value: string }) {
   const messages = useMessages();
   const nowMinute = useNowMinute();
   return formatNextScheduledRunLabel(props.value, Date.parse(`${nowMinute}:00.000Z`), messages);
+}
+
+export function TimerWaitCountdown(props: {
+  readonly wakeAt: string;
+  readonly environmentId: EnvironmentId;
+}) {
+  return (
+    <span
+      ref={tickTextContent(() => formatWaitCountdownNow(props.wakeAt, props.environmentId), true)}
+      className="tabular-nums"
+    />
+  );
+}
+
+export function TimerWaitDetails(props: {
+  readonly wait: ActiveThreadTimerWait;
+  readonly environmentId: EnvironmentId;
+}) {
+  const { wait, environmentId } = props;
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className={cn("font-medium text-foreground", wait.isCron && "font-mono text-2xs")}>
+          {wait.title}
+        </span>
+        {wait.wakeAt ? (
+          <span className="text-muted-foreground">
+            <TimerWaitCountdown wakeAt={wait.wakeAt} environmentId={environmentId} />
+          </span>
+        ) : null}
+      </div>
+      {wait.meta ? <p className="m-0 text-2xs text-muted-foreground">{wait.meta}</p> : null}
+      {wait.prompt ? (
+        <p className="m-0 max-h-36 overflow-y-auto whitespace-pre-wrap wrap-anywhere text-foreground/85">
+          {wait.prompt}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function taskScheduleLine(
@@ -171,12 +220,18 @@ export function ThreadAutomationsPanel(props: {
 }) {
   const { tasksQuery, boundTasks, canOperate, busyTaskId, toggleEnabled, runNow } =
     useThreadAutomations(props);
+  const quietThread = useQuietThreadProjection(scopeThreadRef(props.environmentId, props.threadId));
+  const projection = Predicate.isObject(quietThread) ? quietThread.projection : undefined;
+  const activeRunId = projection?.runs.findLast((run) => run.status === "running")?.id ?? null;
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const navigate = useNavigate();
   const gt = useGT();
   const m = useMessages();
+  const activeTimerWaits = extractActiveTimerWaits(projection?.turnItems, activeRunId, m);
 
-  if (tasksQuery.error === null && boundTasks.length === 0) return null;
+  if (tasksQuery.error === null && boundTasks.length === 0 && activeTimerWaits.length === 0) {
+    return null;
+  }
 
   return (
     <ThreadDetailsSection
@@ -210,6 +265,26 @@ export function ThreadAutomationsPanel(props: {
       }
     >
       <ul className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0">
+        {activeTimerWaits.map((wait) => (
+          <li
+            key={`timer:${wait.id}`}
+            className={cn(
+              "flex items-start rounded-lg py-1.5",
+              THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS,
+            )}
+          >
+            <span className="relative mt-0.5 inline-flex size-4 shrink-0 items-center justify-center">
+              <ClockIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
+              <span
+                className="absolute -right-1 -top-1 size-1.5 rounded-full bg-info"
+                aria-hidden
+              />
+            </span>
+            <div className="min-w-0 flex-1">
+              <TimerWaitDetails wait={wait} environmentId={props.environmentId} />
+            </div>
+          </li>
+        ))}
         {boundTasks.map((task) => (
           <li
             key={task.id}

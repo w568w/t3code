@@ -1,7 +1,9 @@
 import { EnvironmentId, ScheduledTaskId, ThreadId, type ScheduledTask } from "@t3tools/contracts";
+import type { ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import { describe, expect, it } from "vite-plus/test";
 import {
   aggregateSidebarScheduledTasks,
+  extractActiveTimerWaits,
   formatNextScheduledRunLabel,
   isScheduledTaskActive,
   sortActiveScheduledTasks,
@@ -109,5 +111,78 @@ describe("threadAutomations.logic", () => {
     expect(second.get(key1)).toBe(first.get(key1));
     expect(second.get(key2)).not.toBe(first.get(key2));
     expect(second.get(key2)?.nextRunAt).toBe("2026-06-01T12:45:00.000Z");
+  });
+
+  it("extracts active timer waits only for the active run and formats metadata", () => {
+    const items = [
+      {
+        id: "item-cron",
+        type: "dynamic_tool",
+        status: "running",
+        runId: "run-1",
+        wait: {
+          kind: "timer",
+          cron: "*/20 * * * *",
+          prompt: "Truncated summary…",
+        },
+        input: {
+          Prompt: "Full line 1\nFull line 2 with details",
+          MaxIterations: 10,
+          IsDaemon: true,
+          ExactTiming: true,
+          TimerCondition: "never",
+        },
+      },
+      {
+        id: "item-oneshot",
+        type: "dynamic_tool",
+        status: "waiting",
+        runId: "run-1",
+        wait: {
+          kind: "timer",
+          wakeAt: "2026-06-01T12:05:00.000Z",
+          prompt: "Check build status",
+        },
+        input: {
+          DurationSeconds: 300,
+          TimerCondition: "any",
+        },
+      },
+      {
+        id: "item-done",
+        type: "dynamic_tool",
+        status: "completed",
+        runId: "run-1",
+        wait: { kind: "timer", cron: "*/5 * * * *" },
+        input: {},
+      },
+      {
+        id: "item-stale-from-ended-run",
+        type: "dynamic_tool",
+        status: "running",
+        runId: "run-ended",
+        wait: { kind: "timer", cron: "*/10 * * * *" },
+        input: {},
+      },
+    ] as unknown as ThreadStructure["turnItems"];
+
+    expect(extractActiveTimerWaits(items, null)).toEqual([]);
+    expect(extractActiveTimerWaits(items, "run-1")).toEqual([
+      {
+        id: "item-cron",
+        title: "*/20 * * * *",
+        isCron: true,
+        meta: "max 10 runs · daemon · exact timing",
+        prompt: "Full line 1\nFull line 2 with details",
+      },
+      {
+        id: "item-oneshot",
+        title: "Timer",
+        isCron: false,
+        wakeAt: "2026-06-01T12:05:00.000Z",
+        meta: "5m 0s · cancel on any",
+        prompt: "Check build status",
+      },
+    ]);
   });
 });

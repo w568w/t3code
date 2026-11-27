@@ -78,8 +78,10 @@ import {
   goalNowItem,
   runStopNowItem,
   scheduledNowItem,
+  timerWaitNowItem,
 } from "./ThreadActivityBanners";
 import { useClientSettings } from "../../hooks/useSettings";
+import { extractActiveTimerWaits } from "./threadAutomations.logic";
 import { useThreadAutomations } from "./ThreadAutomationsPanel";
 import { useForceStopThread } from "./useForceStopThread";
 import { useAtomValue } from "@effect/atom-react";
@@ -658,8 +660,13 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     environmentId,
     threadId: activeThreadShell?.id ?? null,
   });
+  const activeTimerWaits = extractActiveTimerWaits(
+    turnItems,
+    activeThreadShell?.runtime?.activeRunId,
+    messages,
+  );
   const scheduledNow =
-    activeThreadShell !== null && !runIsLive
+    activeThreadShell !== null && !runIsLive && activeTimerWaits.length === 0
       ? scheduledNowItem(
           {
             threadId: activeThreadShell.id,
@@ -675,7 +682,12 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
           },
           messages,
         )
-      : null;
+      : activeThreadShell !== null && activeTimerWaits.length > 0
+        ? timerWaitNowItem(
+            { environmentId, threadId: activeThreadShell.id, waits: activeTimerWaits },
+            messages,
+          )
+        : null;
   // The relative times read the clock; nowMinute re-renders them on the minute.
   const snoozedUntil = activeThreadShell?.snoozedUntil ?? null;
   const settledAt = activeThreadShell?.settledAt ?? null;

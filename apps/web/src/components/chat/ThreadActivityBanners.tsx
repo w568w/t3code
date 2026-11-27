@@ -22,6 +22,7 @@ import {
   CalendarClockIcon,
   CircleDashedIcon,
   CircleStopIcon,
+  ClockIcon,
   GitBranchIcon,
   MessageCircleIcon,
   ShieldQuestionIcon,
@@ -38,8 +39,12 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 import type { ThreadNowItem } from "./ThreadNow";
 import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
-import type { ActiveScheduledTask } from "./threadAutomations.logic";
-import { NextScheduledRunLabel } from "./ThreadAutomationsPanel";
+import type { ActiveScheduledTask, ActiveThreadTimerWait } from "./threadAutomations.logic";
+import {
+  NextScheduledRunLabel,
+  TimerWaitCountdown,
+  TimerWaitDetails,
+} from "./ThreadAutomationsPanel";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 export function extensionStatusBannerItem(
@@ -413,6 +418,63 @@ export function scheduledNowItem(
       </>
     ) : (
       manageButton
+    ),
+  };
+}
+
+/** Active native timer/schedule wait, for the end of the timeline while the run waits. */
+export function timerWaitNowItem(
+  input: {
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+    readonly waits: ReadonlyArray<ActiveThreadTimerWait>;
+  },
+  resolve: MessageResolver = m,
+): ThreadNowItem | null {
+  const first = input.waits[0];
+  if (!first) return null;
+  const summary = [first.meta, first.prompt].filter(Boolean).join(" · ");
+  return {
+    id: `scheduled-wait:${input.threadId}`,
+    icon: <ClockIcon />,
+    title:
+      input.waits.length === 1 ? (
+        <T>
+          Scheduled · <Var>{first.title}</Var>
+        </T>
+      ) : (
+        <T>
+          Scheduled · <Var>{first.title}</Var> (+<Var>{input.waits.length - 1}</Var> more)
+        </T>
+      ),
+    description:
+      first.wakeAt || summary ? (
+        <>
+          {first.wakeAt ? (
+            <TimerWaitCountdown wakeAt={first.wakeAt} environmentId={input.environmentId} />
+          ) : null}
+          {first.wakeAt && summary ? " · " : null}
+          {summary}
+        </>
+      ) : undefined,
+    actions: (
+      <Popover>
+        <PopoverTrigger openOnHover render={<InlineButton tone="muted" />}>
+          <T>Details</T>
+        </PopoverTrigger>
+        <PopoverPopup
+          side="top"
+          width="md"
+          padding="compact"
+          aria-label={resolve(msg("Schedule details"))}
+        >
+          <div className="max-h-72 space-y-3 overflow-y-auto">
+            {input.waits.map((wait) => (
+              <TimerWaitDetails key={wait.id} wait={wait} environmentId={input.environmentId} />
+            ))}
+          </div>
+        </PopoverPopup>
+      </Popover>
     ),
   };
 }
