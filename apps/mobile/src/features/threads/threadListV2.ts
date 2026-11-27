@@ -266,6 +266,7 @@ export function resolveThreadListV2Status(
     | "pendingGuestMessageCount"
     | "runtime"
     | "blockedOnThreadWait"
+    | "blockedOnTimerWait"
     | "connectionPhase"
     | "pendingBackgroundTasks"
   >,
@@ -282,7 +283,10 @@ export function resolveThreadListV2Status(
   }
   const connectionStatus = resolveThreadConnectionStatus(thread);
   if (connectionStatus !== null) return connectionStatus;
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
+  if (
+    thread.runtime?.status === "running" &&
+    (thread.blockedOnThreadWait === true || thread.blockedOnTimerWait === true)
+  ) {
     return "waiting";
   }
   if (

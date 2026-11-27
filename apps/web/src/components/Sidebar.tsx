@@ -13,7 +13,7 @@ import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -157,7 +157,12 @@ import {
   useQuietThreadShells,
 } from "../state/entities";
 import { environmentPresentations } from "../state/presentation";
-import { primaryServerKeybindingsAtom } from "../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../state/server";
+import { environmentIdsKey } from "../state/environmentAtomList";
+import {
+  aggregateSidebarScheduledTasks,
+  type SidebarThreadScheduledSummary,
+} from "./chat/threadAutomations.logic";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
@@ -945,6 +950,23 @@ function readRouteThreadKey(router: AnyRouter): string | null {
   return ref === null ? null : scopedThreadKey(ref);
 }
 
+const sidebarScheduledByThreadKeyAtom = Atom.family((key: string) =>
+  Atom.make((get) => {
+    const ids = key === "" ? [] : (key.split("\n") as EnvironmentId[]);
+    const entries = ids.map((environmentId) => ({
+      environmentId,
+      tasks: AsyncResult.getOrElse(
+        get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} })),
+        () => null,
+      )?.tasks,
+    }));
+    return aggregateSidebarScheduledTasks(
+      entries,
+      Option.getOrUndefined(get.self<ReadonlyMap<string, SidebarThreadScheduledSummary>>()),
+    );
+  }).pipe(Atom.withLabel(`web-sidebar-scheduled-by-thread:${key}`)),
+);
+
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
   const gt = useGT();
   const messages = useMessages();
@@ -1065,6 +1087,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [searchHighlightKey, setSearchHighlightKey] = useState<string | null>(null);
   const connectedEnvironmentIds = useConnectedEnvironmentIds();
+  const scheduledByThreadKey = useAtomValue(
+    sidebarScheduledByThreadKeyAtom(environmentIdsKey(connectedEnvironmentIds)),
+  );
   const queuePendingFileDrop = useSidebarPendingFileDropStore((s) => s.queuePendingFileDrop);
   const clearPendingFileDrop = useSidebarPendingFileDropStore((s) => s.clearPendingFileDrop);
   const [renamingThreadRef, setRenamingThreadRef] = useState<ScopedThreadRef | null>(null);
@@ -3622,6 +3647,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               : null
                           }
                           wokeAt={threadWokeAt(thread, { now: snoozeNow })}
+                          scheduledSummary={scheduledByThreadKey.get(threadKey) ?? null}
                           isActive={routeRowThreadKey === threadKey}
                           revealRef={routeRowThreadKey === threadKey ? revealActiveRow : undefined}
                           isRouteThread={routeThreadKey === threadKey}

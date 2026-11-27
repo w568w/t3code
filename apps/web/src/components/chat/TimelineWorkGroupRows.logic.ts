@@ -20,3 +20,17 @@ export function formatWorkingTimerNow(startIso: string, environmentId: Environme
 
   return formatDuration(elapsedSeconds * 1_000, m);
 }
+
+export function formatWaitCountdownNow(
+  wakeAtIso: string,
+  environmentId: EnvironmentId,
+  nowMs = Date.now(),
+): string {
+  const remainingSeconds = Math.ceil(
+    (Date.parse(wakeAtIso) - toServerClock(environmentId, nowMs)) / 1000,
+  );
+  if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0) {
+    return m(msg("due now", { $context: "scheduled timer countdown" }));
+  }
+  return m(msg("in {duration}", { duration: formatDuration(remainingSeconds * 1_000, m) }));
+}

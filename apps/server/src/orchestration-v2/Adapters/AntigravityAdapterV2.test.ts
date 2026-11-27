@@ -2069,7 +2069,20 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
           ],
         });
       yield* startTurn(1, false);
-      yield* throughPromptSettled;
+      const settled = yield* throughPromptSettled;
+      const scheduleItem = settled.findLast(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "call_schedule",
+      );
+      assert.isTrue(
+        scheduleItem?.type === "turn_item.updated" &&
+          scheduleItem.turnItem.type === "dynamic_tool" &&
+          scheduleItem.turnItem.wait?.kind === "timer" &&
+          scheduleItem.turnItem.wait.prompt === "Continue the task" &&
+          scheduleItem.turnItem.wait.wakeAt !== undefined,
+        "scheduled wake turn item carries normalized timer wait metadata",
+      );
       yield* TestClock.adjust("61 minutes");
       yield* send({
         sessionUpdate: "tool_call_update",

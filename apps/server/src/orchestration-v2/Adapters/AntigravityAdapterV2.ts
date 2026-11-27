@@ -42,6 +42,7 @@ import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityCli
 import { watchAntigravityPromptOutcome } from "../../provider/acp/AntigravityTurnOutcome.ts";
 import {
   antigravityApprovalOptions,
+  antigravityExtractToolWait,
   antigravitySwarmAddChildSessionId,
   antigravitySwarmAddModel,
   antigravityToolOutlivesPrompt,
@@ -260,6 +261,7 @@ export function makeAntigravityAcpAdapterFlavor(
     wakeOnDetachedRequest: true,
     replyEndsWithUsageUpdate: true,
     toolOutlivesPrompt: antigravityToolOutlivesPrompt,
+    extractToolWait: antigravityExtractToolWait,
     // agy sometimes loses the terminal update or wake for a background command, which would
     // hold the turn in Working forever. 30 minutes still leaves long commands room.
     postSettleCommandHold: {

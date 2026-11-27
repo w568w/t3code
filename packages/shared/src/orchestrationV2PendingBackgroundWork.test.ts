@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId, ProviderThreadId } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
+  deriveBlockedOnThreadWait,
   derivePendingBackgroundWork,
+  deriveRunWaitKind,
   monitorHoldsWakeCompletion,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
@@ -14,6 +16,39 @@ describe("backgroundWorkHoldsCompletion", () => {
     ["a subagent", true, [{ taskId: "review", kind: "subagent" }]],
   ] as const)("with %s pending, holds completion: %s", (_case, holds, tasks) => {
     expect(backgroundWorkHoldsCompletion(tasks)).toBe(holds);
+  });
+});
+
+describe("deriveRunWaitKind", () => {
+  it("distinguishes thread waits from timer waits and yields to active execution tools", () => {
+    const activeRun = { id: "run-1" as never, status: "running" as const };
+    const base = { runId: activeRun.id, status: "running" as const };
+    const timer = {
+      ...base,
+      type: "dynamic_tool" as const,
+      toolName: "Run schedule",
+      wait: { kind: "timer" as const, wakeAt: "2026-06-01T12:05:00.000Z", prompt: "Check build" },
+      input: {},
+    };
+    const threadWait = {
+      ...base,
+      type: "dynamic_tool" as const,
+      toolName: "mcp__t3_code__t3_thread_wait",
+      input: { threadId: "child-1" },
+    };
+    const cmd = { ...base, type: "command_execution" as const, input: "pnpm test" };
+
+    expect(deriveRunWaitKind({ activeRun, turnItems: [timer as never] })).toBe("timer");
+    expect(deriveBlockedOnThreadWait({ activeRun, turnItems: [timer as never] })).toBe(false);
+    expect(deriveRunWaitKind({ activeRun, turnItems: [threadWait as never] })).toBe("thread");
+    expect(deriveBlockedOnThreadWait({ activeRun, turnItems: [threadWait as never] })).toBe(true);
+    expect(deriveRunWaitKind({ activeRun, turnItems: [timer as never, threadWait as never] })).toBe(
+      "thread",
+    );
+    expect(deriveRunWaitKind({ activeRun, turnItems: [timer as never, cmd as never] })).toBeNull();
+    expect(
+      deriveRunWaitKind({ activeRun, turnItems: [{ ...timer, status: "completed" } as never] }),
+    ).toBeNull();
   });
 });
 

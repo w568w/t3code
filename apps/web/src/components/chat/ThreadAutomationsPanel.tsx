@@ -19,10 +19,11 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
 import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
+import { formatNextScheduledRunLabel, sortActiveScheduledTasks } from "./threadAutomations.logic";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -43,6 +44,12 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
+export function NextScheduledRunLabel(props: { readonly value: string }) {
+  const messages = useMessages();
+  const nowMinute = useNowMinute();
+  return formatNextScheduledRunLabel(props.value, Date.parse(`${nowMinute}:00.000Z`), messages);
+}
+
 function taskScheduleLine(
   task: ScheduledTask,
   timestampFormat: TimestampFormat,
@@ -58,7 +65,7 @@ function taskScheduleLine(
         <>
           {" · "}
           <T>
-            next <ScheduledRelativeLabel value={task.nextRunAt} />
+            next <NextScheduledRunLabel value={task.nextRunAt} />
           </T>
         </>
       ) : task.enabled ? (
@@ -73,15 +80,17 @@ function taskScheduleLine(
   );
 }
 
-export function ThreadAutomationsPanel(props: {
+export function useThreadAutomations(props: {
   readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
+  readonly threadId: ThreadId | null;
 }) {
   const canOperate = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(props.environmentId),
   );
   const tasksQuery = useEnvironmentQuery(
-    serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
+    props.threadId === null
+      ? null
+      : serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
     useMessages(),
   );
   const setTaskEnabled = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
@@ -90,17 +99,15 @@ export function ThreadAutomationsPanel(props: {
   const runTaskNow = useAtomCommand(serverEnvironment.runScheduledTaskNow, {
     label: "thread automation run now",
   });
-  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
-  const navigate = useNavigate();
   const gt = useGT();
   const m = useMessages();
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
-  const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
-    (task) => task.threadId === props.threadId,
-  );
-
-  if (tasksQuery.error === null && boundTasks.length === 0) return null;
+  const boundTasks =
+    props.threadId === null
+      ? []
+      : (tasksQuery.data?.tasks ?? []).filter((task) => task.threadId === props.threadId);
+  const activeScheduledTasks = sortActiveScheduledTasks(boundTasks);
 
   const reportFailure = (title: string, error: unknown) => {
     toastManager.add(
@@ -132,6 +139,7 @@ export function ThreadAutomationsPanel(props: {
   const runNow = async (task: ScheduledTask) => {
     if (
       busyTaskId !== null ||
+      task.lastRunStatus === "running" ||
       !readEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope)
     )
       return;
@@ -145,6 +153,30 @@ export function ThreadAutomationsPanel(props: {
       reportFailure(gt("Could not run automation"), squashAtomCommandFailure(result));
     }
   };
+
+  return {
+    tasksQuery,
+    boundTasks,
+    activeScheduledTasks,
+    canOperate,
+    busyTaskId,
+    toggleEnabled,
+    runNow,
+  };
+}
+
+export function ThreadAutomationsPanel(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const { tasksQuery, boundTasks, canOperate, busyTaskId, toggleEnabled, runNow } =
+    useThreadAutomations(props);
+  const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
+  const navigate = useNavigate();
+  const gt = useGT();
+  const m = useMessages();
+
+  if (tasksQuery.error === null && boundTasks.length === 0) return null;
 
   return (
     <ThreadDetailsSection
