@@ -1,6 +1,6 @@
+import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import {
   CHATGPT_USAGE_URL,
-  collectHttpQuotaSources,
   collectLimitAccounts,
   collectLimitPools,
   displayLimitWindows,
@@ -644,21 +644,35 @@ function PoolWindowCard({
   );
 }
 
-function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: number }) {
+function PoolSection({
+  pool,
+  now,
+  title,
+  provider,
+}: {
+  readonly pool: LimitPool;
+  readonly now: number;
+  readonly title?: string;
+  readonly provider?: ServerProvider | undefined;
+}) {
   const color = barColor(pool.driver);
-  const label = providerClients.get(pool.driver)?.label ?? String(pool.driver);
+  const label = title ?? providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
   const m = useMessages();
   return (
     <section className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
-        <ProviderInstanceIcon
-          driverKind={pool.driver}
-          displayName={label}
-          indicatorBackground="var(--background)"
-          className="size-5"
-          iconClassName="size-4 text-foreground/80"
-        />
+        {title === undefined || provider ? (
+          <ProviderInstanceIcon
+            driverKind={pool.driver}
+            displayName={label}
+            accentColor={provider?.accentColor}
+            acpRegistryIconUrl={provider?.iconUrl}
+            indicatorBackground="var(--background)"
+            className="size-5"
+            iconClassName="size-4 text-foreground/80"
+          />
+        ) : null}
         {label}
       </h2>
       {windows.map((window) => {
@@ -679,6 +693,48 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
   );
 }
 
+const HTTP_QUOTA_FALLBACK_DRIVER = ProviderDriverKind.make("http");
+
+function collectHttpQuotaPools(
+  presentations: Parameters<typeof collectLimitAccounts>[0],
+  now: number,
+) {
+  return [...presentations].flatMap(([environmentId, presentation]) =>
+    (presentation.serverConfig?.usageLimitSources ?? []).flatMap((source) =>
+      source.kind !== "http"
+        ? []
+        : (source.quotaAccounts ?? []).flatMap((account) => {
+            if (account.windows.length === 0) return [];
+            const provider = presentation.serverConfig?.providers.find(
+              (entry) => entry.instanceId === account.providerInstanceId,
+            );
+            const key = `${environmentId}:${source.id}:${account.id}`;
+            const sourceLabel =
+              presentations.size > 1
+                ? `${presentation.entry.target.label} · ${source.label}`
+                : source.label;
+            return collectLimitPools(
+              [
+                {
+                  key,
+                  driver: provider?.driver ?? HTTP_QUOTA_FALLBACK_DRIVER,
+                  displayName: account.label,
+                  email: undefined,
+                  plan: undefined,
+                  accentColor: provider?.accentColor,
+                  environments: [],
+                  sourceLabel,
+                  redeem: null,
+                  limits: { checkedAt: source.checkedAt, windows: account.windows },
+                },
+              ],
+              now,
+            ).map((pool) => ({ key, title: account.label, provider, pool }));
+          }),
+    ),
+  );
+}
+
 export function UsageLimitsPooled({
   presentations,
   now,
@@ -691,7 +747,7 @@ export function UsageLimitsPooled({
   const [segmentPopover] = useState(() => PopoverCreateHandle<SegmentPayload>());
   const segmentPopoverActions = useRef<PopoverPrimitive.Root.Actions | null>(null);
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
-  const quotaSources = collectHttpQuotaSources(presentations);
+  const httpQuotaPools = collectHttpQuotaPools(presentations, now);
   const notices = collectLimitNotices(presentations, m);
   const externalLinks = collectExternalUsageLinks(presentations, m);
   return (
@@ -699,7 +755,7 @@ export function UsageLimitsPooled({
       {pools.length === 0 &&
       notices.length === 0 &&
       externalLinks.length === 0 &&
-      quotaSources.length === 0 ? (
+      httpQuotaPools.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           <T>No provider on the selected environments reports subscription limits.</T>
         </p>
@@ -710,6 +766,9 @@ export function UsageLimitsPooled({
             <PoolSection pool={pool} now={now} />
           </Fragment>
         ))}
+        {httpQuotaPools.map(({ key, ...entry }) => (
+          <PoolSection key={key} now={now} {...entry} />
+        ))}
       </SegmentPopoverContext>
       <Popover handle={segmentPopover} actionsRef={segmentPopoverActions}>
         {({ payload }) =>
@@ -718,37 +777,12 @@ export function UsageLimitsPooled({
               handle={segmentPopover}
               actions={segmentPopoverActions}
               payload={payload}
-              pools={pools}
+              pools={[...pools, ...httpQuotaPools.map((entry) => entry.pool)]}
               now={now}
             />
           ) : null
         }
       </Popover>
-      {quotaSources.map((source) => (
-        <section key={source.key} className="space-y-3 rounded-xl border p-4">
-          <h2 className="text-sm font-medium">{source.label}</h2>
-          {source.quotaAccounts?.map((account) => (
-            <div key={account.id} className="space-y-1">
-              <h3 className="text-sm font-medium">{account.label}</h3>
-              {account.windows.map((window) => {
-                const reset = formatResetsIn(window, now, m);
-                return (
-                  <div
-                    key={window.id}
-                    className="flex justify-between gap-3 text-sm text-muted-foreground"
-                  >
-                    <span>{window.label}</span>
-                    <span>
-                      {gt("{remaining}% left", { remaining: remainingPercent(window) })}
-                      {reset ? ` · ${reset}` : ""}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </section>
-      ))}
       {externalLinks.map((link) => (
         <section
           key={link.url}

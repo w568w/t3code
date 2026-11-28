@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { CHATGPT_USAGE_URL } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
@@ -101,5 +102,55 @@ describe("UsageLimitsPooled next refill", () => {
       <UsageLimitsPooled presentations={presentations} now={Date.parse("2026-10-25T18:00:00Z")} />,
     );
     await expect.element(screen.getByText(/^↻ \+\d+%$/)).not.toBeInTheDocument();
+  });
+});
+
+describe("UsageLimitsPooled HTTP quota sources", () => {
+  it("renders HTTP quota accounts with pool progress bars", async () => {
+    const provider: ServerProvider = {
+      ...managedChatGpt("codebuddy", "CodeBuddy"),
+      driver: ProviderDriverKind.make("acpRegistry"),
+      usageLimits: undefined,
+    };
+    const presentations = new Map([
+      [
+        EnvironmentId.make("desk"),
+        {
+          entry: { target: { label: "Desk" } },
+          serverConfig: {
+            providers: [provider],
+            usageLimitSources: [
+              {
+                id: UsageLimitSourceId.make("bridge"),
+                kind: "http" as const,
+                label: "CodeBuddy",
+                checkedAt,
+                accounts: [],
+                quotaAccounts: [
+                  {
+                    id: "cb",
+                    label: "CodeBuddy",
+                    providerInstanceId: provider.instanceId,
+                    windows: [
+                      {
+                        id: "credits",
+                        kind: "monthly" as const,
+                        label: "Credits 4,093 / 4,114",
+                        usedPercent: 1,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    ]);
+    await using screen = await render(
+      <UsageLimitsPooled presentations={presentations} now={Date.parse(checkedAt)} />,
+    );
+    await expect.element(screen.getByRole("heading", { name: "CodeBuddy" })).toBeVisible();
+    await expect.element(screen.getByText("99%")).toBeVisible();
   });
 });
