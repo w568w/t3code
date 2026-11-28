@@ -1,0 +1,205 @@
+name: Build macOS Homebrew Cask
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional semver override (e.g. 0.1.13-nightly.20261128.1)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-macos-homebrew-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build-macos-dmg:
+    name: Build macOS arm64 DMG
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      # actions/checkout runs `git submodule foreach` during auth cleanup even with
+      # submodules disabled, which fails on orphaned gitlinks in upstream's .repos/.
+      - name: Checkout
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${GITHUB_SHA}"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GITHUB_REF_VALUE: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          base_version="$(jq -r '.version' apps/desktop/package.json)"
+          if [[ -n "$INPUT_VERSION" ]]; then
+            build_version="$INPUT_VERSION"
+          elif [[ "$GITHUB_REF_VALUE" == refs/tags/v* ]]; then
+            build_version="${GITHUB_REF_NAME#v}"
+          else
+            stamp="$(date -u +%Y%m%d)"
+            build_version="${base_version}-nightly.${stamp}.${GITHUB_RUN_NUMBER}"
+          fi
+          is_nightly="false"
+          if [[ "$build_version" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            is_nightly="true"
+          fi
+          echo "build_version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "is_nightly=$is_nightly" >> "$GITHUB_OUTPUT"
+          echo "Building macOS version $build_version (nightly=$is_nightly)"
+
+      - name: Setup CI dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Cache resource monitor
+        id: resource_monitor_cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: native/resource-monitor/target/aarch64-apple-darwin/release/t3-resource-monitor
+          key: resource-monitor-aarch64-apple-darwin-${{ hashFiles('.cargo/config.toml', 'native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/build.rs', 'native/resource-monitor/src/**') }}
+
+      - name: Setup Rust
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Build resource monitor
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target aarch64-apple-darwin
+
+      - name: Align package versions
+        shell: bash
+        run: node scripts/update-release-package-versions.ts "${{ steps.version.outputs.build_version }}"
+
+      - name: Build JS bundle
+        shell: bash
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: vp run build:desktop:bundle
+
+      - name: Build macOS arm64 DMG
+        shell: bash
+        env:
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true"
+        run: |
+          node scripts/build-desktop-artifact.ts \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.version.outputs.build_version }}" \
+            --skip-build \
+            --verbose
+
+      - name: Stage DMG artifact
+        id: stage
+        shell: bash
+        env:
+          IS_NIGHTLY: ${{ steps.version.outputs.is_nightly }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one DMG in release/, found ${#dmgs[@]}" >&2
+            ls -la release/ || true
+            exit 1
+          fi
+          asset_name="T3-Code-arm64.dmg"
+          if [[ "$IS_NIGHTLY" == "true" ]]; then
+            asset_name="T3-Code-Nightly-arm64.dmg"
+          fi
+          mkdir -p dist-macos
+          cp "${dmgs[0]}" "dist-macos/${asset_name}"
+          (cd dist-macos && shasum -a 256 "${asset_name}" > SHA256SUMS.txt)
+          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+          ls -lh dist-macos/
+          cat dist-macos/SHA256SUMS.txt
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dmg-arm64
+          path: dist-macos/*
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish rolling Homebrew release
+        if: steps.version.outputs.is_nightly == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_VERSION: ${{ steps.version.outputs.build_version }}
+          ASSET_NAME: ${{ steps.stage.outputs.asset_name }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<EOF
+          Automated macOS (Apple Silicon) nightly build \`${BUILD_VERSION}\` from commit \`${GITHUB_SHA::10}\`.
+
+          ### Install via Homebrew
+          \`\`\`bash
+          brew tap ${GITHUB_REPOSITORY} https://github.com/${GITHUB_REPOSITORY}
+          brew install --cask ${GITHUB_REPOSITORY}/t3code-fork
+          \`\`\`
+
+          ### Upgrade to latest nightly
+          \`\`\`bash
+          brew upgrade --cask --greedy ${GITHUB_REPOSITORY}/t3code-fork
+          \`\`\`
+          EOF
+          )
+          if gh release view macos-nightly >/dev/null 2>&1; then
+            gh release upload macos-nightly "dist-macos/${ASSET_NAME}" dist-macos/SHA256SUMS.txt --clobber
+            gh release edit macos-nightly \
+              --target "${GITHUB_SHA}" \
+              --title "T3 Code macOS Nightly (${BUILD_VERSION})" \
+              --notes "$notes"
+          else
+            gh release create macos-nightly "dist-macos/${ASSET_NAME}" dist-macos/SHA256SUMS.txt \
+              --target "${GITHUB_SHA}" \
+              --title "T3 Code macOS Nightly (${BUILD_VERSION})" \
+              --notes "$notes" \
+              --prerelease
+          fi
+
+      - name: Publish tagged macOS release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.version.outputs.is_nightly != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          BUILD_VERSION: ${{ steps.version.outputs.build_version }}
+          ASSET_NAME: ${{ steps.stage.outputs.asset_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist-macos/${ASSET_NAME}" dist-macos/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" "dist-macos/${ASSET_NAME}" dist-macos/SHA256SUMS.txt \
+              --title "T3 Code ${BUILD_VERSION}" \
+              --notes "Automated macOS (Apple Silicon) DMG build for \`${BUILD_VERSION}\`." \
+              --prerelease
+          fi
